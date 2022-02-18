@@ -23,23 +23,15 @@
 (defn wrap-server-timing
   [handler]
   (let [seconds-from #(float (/ (- (System/nanoTime) %) 1000000000))]
-    (fn
-      ;; ([request]
-      ;;  (let [start    (System/nanoTime)
-      ;;        response (handler request)]
-      ;;    (update response :headers
-      ;;            (fn [headers]
-      ;;              (assoc headers "Server-Timing" (str "total;dur=" (seconds-from start)))))))
-      ([request respond raise]
-       (let [start (System/nanoTime)]
-         (handler request
-                  (fn [response]
-                    (-> response
-                        (update :headers (fn [headers]
-                                           (assoc headers "Server-Timing" (str "total;dur=" (seconds-from start)))))
-                        (respond)))
-                  raise))))))
-
+    (fn [request respond raise]
+      (let [start (System/nanoTime)]
+        (handler request
+                 (fn [response]
+                   (-> response
+                       (update :headers (fn [headers]
+                                          (assoc headers "Server-Timing" (str "total;dur=" (seconds-from start)))))
+                       (respond)))
+                 raise)))))
 
 (defn wrap-parse-request-body
   [handler]
@@ -76,18 +68,12 @@
                :headers {"content-type" "application/transit+json"}
                :body (t/encode-str data {:type :json-verbose})}))]
 
-    (fn
-      ([request]
-       (try
-         (handler (handle-request request))
-         (catch Exception cause
-           (handle-exception cause))))
-      ([request respond raise]
-       (try
-         (let [request (handle-request request)]
-           (handler request respond raise))
-         (catch Exception cause
-           (ex/try* #(respond (handle-exception cause)) raise)))))))
+    (fn [request respond raise]
+      (try
+        (let [request (handle-request request)]
+          (handler request respond raise))
+        (catch Exception cause
+          (ex/try* #(respond (handle-exception cause)) raise))))))
 
 (def parse-request-body
   {:name ::parse-request-body
@@ -146,14 +132,11 @@
             (cond-> response
               (map? response) (impl-format-response-body request)))]
 
-    (fn
-      ;; ([request]
-      ;;  (-> request handler (handle-response request)))
-      ([request respond raise]
-       (handler request
-                (fn [response]
-                  (respond (handle-response response request)))
-                raise)))))
+    (fn [request respond raise]
+      (handler request
+               (fn [response]
+                 (respond (handle-response response request)))
+               raise))))
 
 (def format-response-body
   {:name ::format-response-body
@@ -161,16 +144,9 @@
 
 (defn wrap-errors
   [handler on-error]
-  (fn
-    ;; ([request]
-    ;;  (try
-    ;;    (handler request)
-    ;;    (catch Throwable e
-    ;;      (on-error e request))))
-    ([request respond raise]
-     (handler request respond (fn [cause]
-                                (-> cause (on-error request) respond))))))
-
+  (fn [request respond raise]
+    (handler request respond (fn [cause]
+                               (-> cause (on-error request) respond)))))
 
 (def errors
   {:name ::errors
@@ -215,21 +191,6 @@
 ;;   {:name ::etag
 ;;    :compile (constantly wrap-etag)})
 
-;; (defn activity-logger
-;;   [handler]
-;;   (let [logger "penpot.profile-activity"]
-;;     (fn [{:keys [headers] :as request}]
-;;       (let [ip-addr    (get headers "x-forwarded-for")
-;;             profile-id (:profile-id request)
-;;             qstring    (:query-string request)]
-;;         (l/info ::l/async true
-;;                 ::l/logger logger
-;;                 :ip-addr ip-addr
-;;                 :profile-id profile-id
-;;                 :uri (str (:uri request) (when qstring (str "?" qstring)))
-;;                 :method (name (:request-method request)))
-;;         (handler request)))))
-
 (defn wrap-cors
   [handler]
   (if-not (contains? cf/flags :cors)
@@ -245,22 +206,16 @@
                          (assoc "access-control-allow-credentials" "true")
                          (assoc "access-control-expose-headers" "x-requested-with, content-type, cookie")
                          (assoc "access-control-allow-headers" "x-frontend-version, content-type, accept, x-requested-width"))))))]
-      (fn
-        ([request]
-         (if (= (:request-method request) :options)
-           (-> {:status 200 :body ""}
-               (add-cors-headers request))
-           (let [response (handler request)]
-             (add-cors-headers response request))))
-        ([request respond raise]
-         (if (= (:request-method request) :options)
-           (-> {:status 200 :body ""}
-               (add-cors-headers request)
-               (respond))
-           (handler request
-                    (fn [response]
-                      (respond (add-cors-headers response request)))
-                    raise)))))))
+      (fn [request respond raise]
+        (if (= (:request-method request) :options)
+          (-> {:status 200 :body ""}
+              (add-cors-headers request)
+              (respond))
+          (handler request
+                   (fn [response]
+                     (respond (add-cors-headers response request)))
+                   raise))))))
+
 (def cors
   {:name ::cors
    :compile (constantly wrap-cors)})

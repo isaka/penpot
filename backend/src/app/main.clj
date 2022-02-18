@@ -24,6 +24,18 @@
     :min-pool-size 0
     :max-pool-size 60}
 
+   [::default :app.worker/executor]
+   {:parallelism 200
+    :name :default}
+
+   [::blocking :app.worker/executor]
+   {:parallelism 20
+    :name :blocking}
+
+   [::worker :app.worker/executor]
+   {:parallelism 10
+    :name :worker}
+
    :app.migrations/migrations
    {}
 
@@ -95,7 +107,6 @@
 
    :app.http.websocket/handler
    {:pool     (ig/ref :app.db/pool)
-    :executor (ig/ref [::worker :app.worker/executor])
     :metrics  (ig/ref :app.metrics/metrics)
     :msgbus   (ig/ref :app.msgbus/msgbus)}
 
@@ -127,16 +138,8 @@
     :public-uri (cf/get :public-uri)
     :audit      (ig/ref :app.loggers.audit/collector)
     :executors
-    {:default (ig/ref [::worker :app.worker/executor])
-     :rpc     (ig/ref [::rpc :app.worker/executor])}}
-
-   [::worker :app.worker/executor]
-   {:parallelism 20
-    :name :worker}
-
-   [::rpc :app.worker/executor]
-   {:parallelism 20
-    :name :rpc}
+    {:default  (ig/ref [::default :app.worker/executor])
+     :blocking (ig/ref [::blocking :app.worker/executor])}}
 
    :app.worker/worker
    {:executor (ig/ref [::worker :app.worker/executor])
@@ -259,7 +262,7 @@
 
    :app.loggers.audit/http-handler
    {:pool     (ig/ref :app.db/pool)
-    :executor (ig/ref [::worker :app.worker/executor])}
+    :executor (ig/ref [::default :app.worker/executor])}
 
    :app.loggers.audit/collector
    {:pool     (ig/ref :app.db/pool)
@@ -287,15 +290,6 @@
 
    :app.loggers.database/reporter
    {:receiver (ig/ref :app.loggers.zmq/receiver)
-    :pool     (ig/ref :app.db/pool)
-    :executor (ig/ref [::worker :app.worker/executor])}
-
-   :app.loggers.sentry/reporter
-   {:dsn                (cf/get :sentry-dsn)
-    :trace-sample-rate  (cf/get :sentry-trace-sample-rate 1.0)
-    :attach-stack-trace (cf/get :sentry-attach-stack-trace false)
-    :debug              (cf/get :sentry-debug false)
-    :receiver (ig/ref :app.loggers.zmq/receiver)
     :pool     (ig/ref :app.db/pool)
     :executor (ig/ref [::worker :app.worker/executor])}
 

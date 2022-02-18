@@ -84,10 +84,8 @@
 
       (-> ((get methods type default-handler) data)
           (p/then (fn [response]
-                    (prn "rpc-mutation-handler" "RESPONSE" response)
                     (respond (handle-response response))))
           (p/catch (fn [cause]
-                     (prn "rpc-mutation-handler" "CATCH" cause)
                      (raise cause)))))))
 
 (defn- wrap-metrics
@@ -107,7 +105,6 @@
   it to a preconfigured executor service."
   [{:keys [executors] :as cfg} f mdata]
   (let [dname (::async/dispatch mdata :none)]
-    (prn "wrap-dispatch" mdata)
     (if (= :none dname)
       (with-meta
         (fn [cfg params]

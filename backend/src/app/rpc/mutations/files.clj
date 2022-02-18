@@ -21,7 +21,7 @@
    [app.util.blob :as blob]
    [app.util.services :as sv]
    [app.util.time :as dt]
-   [promesa.exec :as px]
+   [app.util.async :as async]
    [clojure.spec.alpha :as s]))
 
 (declare create-file)
@@ -273,15 +273,14 @@
          (contains? o :changes-with-metadata)))))
 
 (sv/defmethod ::update-file
+  {::async/dispatch :blocking}
   [{:keys [pool executor] :as cfg} {:keys [id profile-id] :as params}]
-  (letfn [(handle []
-            (db/with-atomic [conn pool]
-              (db/xact-lock! conn id)
-              (let [{:keys [id] :as file} (db/get-by-id conn :file id {:for-key-share true})]
-                (files/check-edition-permissions! conn profile-id id)
-                (update-file (assoc cfg :conn  conn)
-                             (assoc params :file file)))))]
-    (px/submit! executor handle)))
+  (db/with-atomic [conn pool]
+    (db/xact-lock! conn id)
+    (let [{:keys [id] :as file} (db/get-by-id conn :file id {:for-key-share true})]
+      (files/check-edition-permissions! conn profile-id id)
+      (update-file (assoc cfg :conn  conn)
+                   (assoc params :file file)))))
 
 (defn- take-snapshot?
   "Defines the rule when file `data` snapshot should be saved."

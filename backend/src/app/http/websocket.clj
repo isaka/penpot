@@ -100,7 +100,7 @@
   (s/keys :req-un [::file-id ::session-id]))
 
 (defmethod ig/pre-init-spec ::handler [_]
-  (s/keys :req-un [::msgbus ::db/pool ::mtx/metrics ::wrk/executor]))
+  (s/keys :req-un [::msgbus ::db/pool ::mtx/metrics]))
 
 (defmethod ig/init-key ::handler
   [_ {:keys [metrics pool] :as cfg}]
