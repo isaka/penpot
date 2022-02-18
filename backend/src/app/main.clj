@@ -60,7 +60,7 @@
    :app.http.session/updater
    {:pool           (ig/ref :app.db/pool)
     :metrics        (ig/ref :app.metrics/metrics)
-    :executor       (ig/ref :app.worker/executor)
+    :executor       (ig/ref [::worker :app.worker/executor])
     :session        (ig/ref :app.http.session/session)
     :max-batch-age  (cf/get :http-session-updater-batch-max-age)
     :max-batch-size (cf/get :http-session-updater-batch-max-size)}
@@ -95,7 +95,7 @@
 
    :app.http.websocket/handler
    {:pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)
+    :executor (ig/ref [::worker :app.worker/executor])
     :metrics  (ig/ref :app.metrics/metrics)
     :msgbus   (ig/ref :app.msgbus/msgbus)}
 
@@ -125,22 +125,27 @@
     :storage    (ig/ref :app.storage/storage)
     :msgbus     (ig/ref :app.msgbus/msgbus)
     :public-uri (cf/get :public-uri)
-    :audit      (ig/ref :app.loggers.audit/collector)}
+    :audit      (ig/ref :app.loggers.audit/collector)
+    :executors
+    {:default (ig/ref [::worker :app.worker/executor])
+     :rpc     (ig/ref [::rpc :app.worker/executor])}}
 
-   :app.worker/executor
-   {:min-threads 0
-    :max-threads 256
-    :idle-timeout 60000
+   [::worker :app.worker/executor]
+   {:parallelism 20
     :name :worker}
 
+   [::rpc :app.worker/executor]
+   {:parallelism 20
+    :name :rpc}
+
    :app.worker/worker
-   {:executor (ig/ref :app.worker/executor)
+   {:executor (ig/ref [::worker :app.worker/executor])
     :tasks    (ig/ref :app.worker/registry)
     :metrics  (ig/ref :app.metrics/metrics)
     :pool     (ig/ref :app.db/pool)}
 
    :app.worker/scheduler
-   {:executor   (ig/ref :app.worker/executor)
+   {:executor   (ig/ref [::worker :app.worker/executor])
     :tasks      (ig/ref :app.worker/registry)
     :pool       (ig/ref :app.db/pool)
     :schedule
@@ -254,11 +259,11 @@
 
    :app.loggers.audit/http-handler
    {:pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.loggers.audit/collector
    {:pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.loggers.audit/archive-task
    {:uri      (cf/get :audit-log-archive-uri)
@@ -272,18 +277,18 @@
    :app.loggers.loki/reporter
    {:uri      (cf/get :loggers-loki-uri)
     :receiver (ig/ref :app.loggers.zmq/receiver)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.loggers.mattermost/reporter
    {:uri      (cf/get :error-report-webhook)
     :receiver (ig/ref :app.loggers.zmq/receiver)
     :pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.loggers.database/reporter
    {:receiver (ig/ref :app.loggers.zmq/receiver)
     :pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.loggers.sentry/reporter
    {:dsn                (cf/get :sentry-dsn)
@@ -292,7 +297,7 @@
     :debug              (cf/get :sentry-debug false)
     :receiver (ig/ref :app.loggers.zmq/receiver)
     :pool     (ig/ref :app.db/pool)
-    :executor (ig/ref :app.worker/executor)}
+    :executor (ig/ref [::worker :app.worker/executor])}
 
    :app.storage/storage
    {:pool     (ig/ref :app.db/pool)

@@ -264,9 +264,9 @@
      (with-meta
        (fn
          ([a]
-         (with-measure
-           :expr (origf a)
-           :cb   #((::fn mobj) {:val %})))
+          (with-measure
+            :expr (origf a)
+            :cb   #((::fn mobj) {:val %})))
          ([a b]
           (with-measure
             :expr (origf a b)

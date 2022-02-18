@@ -49,7 +49,9 @@
 (defmethod ig/init-key ::server
   [_ {:keys [handler router port name metrics host] :as opts}]
   (l/info :msg "starting http server" :port port :host host :name name)
-  (let [options {:http/port port :http/host host}
+  (let [options {:http/port port
+                 :http/host host
+                 :ring/async true}
         handler (cond
                   (fn? handler)  handler
                   (some? router) (wrap-router router)
@@ -70,17 +72,25 @@
   (let [default (rr/routes
                  (rr/create-resource-handler {:path "/"})
                  (rr/create-default-handler))
-        options {:middleware [middleware/server-timing]}
+        options {:middleware [middleware/wrap-server-timing]}
         handler (rr/ring-handler router default options)]
-    (fn [request]
-      (try
-        (handler request)
-        (catch Throwable e
-          (l/error :hint "unexpected error processing request"
-                   ::l/context (errors/get-error-context request e)
-                   :query-string (:query-string request)
-                   :cause e)
-          {:status 500 :body "internal server error"})))))
+    (fn
+      ;; ([request]
+      ;;  (try
+      ;;    (handler request)
+      ;;    (catch Throwable cause
+      ;;      (l/error :hint "unexpected error processing request"
+      ;;               ::l/context (errors/get-error-context request cause)
+      ;;               :query-string (:query-string request)
+      ;;               :cause cause)
+      ;;      {:status 500 :body "internal server error"})))
+      ([request respond raise]
+       (handler request respond (fn [cause]
+                                  (l/error :hint "unexpected error processing request"
+                                           ::l/context (errors/get-error-context request cause)
+                                           :query-string (:query-string request)
+                                           :cause cause)
+                                  (respond {:status 500 :body "internal server error"})))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Http Router
@@ -106,7 +116,7 @@
   (rr/router
    [["/metrics" {:get (:handler metrics)}]
     ["/assets" {:middleware [[middleware/format-response-body]
-                             [middleware/errors errors/handle]
+                             [middleware/wrap-errors errors/handle]
                              [middleware/cookies]
                              (:middleware session)]}
      ["/by-id/:id" {:get (:objects-handler assets)}]
@@ -145,7 +155,6 @@
                           [middleware/multipart-params]
                           [middleware/keyword-params]
                           [middleware/format-response-body]
-                          [middleware/etag]
                           [middleware/parse-request-body]
                           [middleware/errors errors/handle]
                           [middleware/cookies]]}

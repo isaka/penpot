@@ -22,10 +22,14 @@
    [integrant.core :as ig]
    [promesa.exec :as px])
   (:import
-   org.eclipse.jetty.util.thread.QueuedThreadPool
    java.util.concurrent.ExecutorService
+   java.util.concurrent.ForkJoinPool
+   java.util.concurrent.ForkJoinWorkerThread
+   java.util.concurrent.ForkJoinPool$ForkJoinWorkerThreadFactory
    java.util.concurrent.Executors
    java.util.concurrent.Executor))
+
+(set! *warn-on-reflection* true)
 
 (s/def ::executor #(instance? Executor %))
 
@@ -34,25 +38,30 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (s/def ::name keyword?)
+(s/def ::parallelism ::us/integer)
 (s/def ::min-threads ::us/integer)
 (s/def ::max-threads ::us/integer)
 (s/def ::idle-timeout ::us/integer)
 
 (defmethod ig/pre-init-spec ::executor [_]
-  (s/keys :req-un [::min-threads ::max-threads ::idle-timeout ::name]))
+  (s/keys :req-un [::name ::parallelism]))
+
+(defn- get-thread-factory
+  ^ForkJoinPool$ForkJoinWorkerThreadFactory
+  [prefix]
+  (reify ForkJoinPool$ForkJoinWorkerThreadFactory
+    (newThread [_ pool]
+      (let [^ForkJoinWorkerThread thread (.newThread ForkJoinPool/defaultForkJoinWorkerThreadFactory pool)]
+        (.setName thread (str (name prefix) "-" (.getPoolIndex thread)))
+        thread))))
 
 (defmethod ig/init-key ::executor
-  [_ {:keys [min-threads max-threads idle-timeout name]}]
-  (doto (QueuedThreadPool. (int max-threads)
-                           (int min-threads)
-                           (int idle-timeout))
-    (.setStopTimeout 500)
-    (.setName (d/name name))
-    (.start)))
+  [_ {:keys [parallelism name]}]
+  (ForkJoinPool. (int parallelism) (get-thread-factory name) nil false))
 
 (defmethod ig/halt-key! ::executor
   [_ instance]
-  (.stop ^QueuedThreadPool instance))
+  (.shutdown ^ForkJoinPool instance))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Worker

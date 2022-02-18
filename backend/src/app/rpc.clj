@@ -10,82 +10,160 @@
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [app.common.spec :as us]
+   [app.http.errors :as errors]
    [app.db :as db]
    [app.loggers.audit :as audit]
    [app.metrics :as mtx]
    [app.util.retry :as retry]
    [app.util.rlimit :as rlimit]
    [app.util.services :as sv]
+   [app.util.async :as async]
+   [app.worker :as wrk]
+   [promesa.core :as p]
+   [promesa.exec :as px]
    [clojure.spec.alpha :as s]
    [integrant.core :as ig]))
 
 (defn- default-handler
   [_]
-  (ex/raise :type :not-found))
+  (p/rejected (ex/error :type :not-found)))
 
+;; TODO: make hooks fully asynchronous
 (defn- run-hook
   [hook-fn response]
   (ex/ignoring (hook-fn))
   response)
 
 (defn- rpc-query-handler
-  [methods {:keys [profile-id session-id] :as request}]
-  (let [type   (keyword (get-in request [:path-params :type]))
+  "Ring handler that dispatches query requests and convert between
+  internal async flow into ring async flow."
+  [methods {:keys [profile-id session-id] :as request} respond raise]
+  (letfn [(handle-response [result]
+            (let [mdata (meta result)]
+              (cond->> {:status 200 :body result}
+                (fn? (:transform-response mdata))
+                ((:transform-response mdata) request))))]
 
-        data   (merge (:params request)
-                      (:body-params request)
-                      (:uploads request)
-                      {::request request})
+    (let [type   (keyword (get-in request [:path-params :type]))
+          data   (merge (:params request)
+                        (:body-params request)
+                        (:uploads request)
+                        {::request request})
 
-        data   (if profile-id
-                 (assoc data :profile-id profile-id ::session-id session-id)
-                 (dissoc data :profile-id))
+          data   (if profile-id
+                   (assoc data :profile-id profile-id ::session-id session-id)
+                   (dissoc data :profile-id))]
 
-        result ((get methods type default-handler) data)
-        mdata  (meta result)]
-
-    (cond->> {:status 200 :body result}
-      (fn? (:transform-response mdata))
-      ((:transform-response mdata) request))))
+    (-> ((get methods type default-handler) data)
+        (p/then (fn [response]
+                  (respond (handle-response response))))
+        (p/catch raise)))))
 
 (defn- rpc-mutation-handler
-  [methods {:keys [profile-id session-id] :as request}]
-  (let [type   (keyword (get-in request [:path-params :type]))
-        data   (merge (:params request)
+  "Ring handler that dispatches mutation requests and convert between
+  internal async flow into ring async flow."
+  [methods {:keys [profile-id session-id] :as request} respond raise]
+  (letfn [(handle-response [result]
+            (let [mdata  (meta result)]
+              (cond->> {:status 200 :body result}
+                (fn? (:transform-response mdata))
+                ((:transform-response mdata) request)
+
+                (fn? (:before-complete mdata))
+                (run-hook (:before-complete mdata)))))]
+
+    (let [type (keyword (get-in request [:path-params :type]))
+          data (merge (:params request)
                       (:body-params request)
                       (:uploads request)
                       {::request request})
 
-        data   (if profile-id
+          data (if profile-id
                  (assoc data :profile-id profile-id ::session-id session-id)
-                 (dissoc data :profile-id))
+                 (dissoc data :profile-id))]
 
-        result ((get methods type default-handler) data)
-        mdata  (meta result)]
-    (cond->> {:status 200 :body result}
-      (fn? (:transform-response mdata))
-      ((:transform-response mdata) request)
+      (-> ((get methods type default-handler) data)
+          (p/then (fn [response]
+                    (prn "rpc-mutation-handler" "RESPONSE" response)
+                    (respond (handle-response response))))
+          (p/catch (fn [cause]
+                     (prn "rpc-mutation-handler" "CATCH" cause)
+                     (raise cause)))))))
 
-      (fn? (:before-complete mdata))
-      (run-hook (:before-complete mdata)))))
+(defn- wrap-metrics
+  "Wrap service method with metrics measurement."
+  [{:keys [::mobj]} f mdata]
+  (let [labels [(::sv/name mdata)]]
+    (fn [cfg params]
+      (let [start (System/nanoTime)]
+        (p/finally
+          (f cfg params)
+          (fn [_ _]
+            (let [val (/ (- (System/nanoTime) start) 1000000)]
+              ((::mtx/fn mobj) {:val val :labels labels}))))))))
 
-(defn- wrap-with-metrics
-  [cfg f mdata]
-  (mtx/wrap-summary f (::mobj cfg) [(::sv/name mdata)]))
+(defn- wrap-dispatch
+  "Wraps service method into async flow, with the ability to dispatching
+  it to a preconfigured executor service."
+  [{:keys [executors] :as cfg} f mdata]
+  (let [dname (::async/dispatch mdata :none)]
+    (prn "wrap-dispatch" mdata)
+    (if (= :none dname)
+      (with-meta
+        (fn [cfg params]
+          (try
+            (p/wrap (f cfg params))
+            (catch Throwable cause
+              (p/rejected cause))))
+        mdata)
+      (let [executor (get executors dname)]
+        (when-not executor
+          (ex/raise :type :internal
+                    :code :executor-not-configured
+                    :hint (format "executor %s not configured" dname)))
+        (with-meta
+          (fn [cfg params]
+            (px/submit! executor #(f cfg params)))
+          mdata)))))
 
-(defn- wrap-impl
+(defn- wrap-audit
+  [{:keys [audit] :as cfg} f mdata]
+  (if audit
+    (with-meta
+      (fn [cfg {:keys [::request] :as params}]
+        (p/finally
+          (f cfg params)
+          (fn [result _]
+            (when result
+              (let [resultm    (meta result)
+                    profile-id (or (:profile-id params)
+                                   (:profile-id result)
+                                   (::audit/profile-id resultm))
+                    props      (d/merge params (::audit/props resultm))]
+                (audit :cmd :submit
+                       :type (or (::audit/type resultm)
+                                 (::type cfg))
+                       :name (or (::audit/name resultm)
+                                 (::sv/name mdata))
+                       :profile-id profile-id
+                       :ip-addr (audit/parse-client-ip request)
+                       :props (dissoc props ::request)))))))
+      mdata)))
+
+(defn- wrap
   [{:keys [audit] :as cfg} f mdata]
   (let [f     (as-> f $
-                (rlimit/wrap-rlimit cfg $ mdata)
-                (retry/wrap-retry cfg $ mdata)
-                (wrap-with-metrics cfg $ mdata))
+                (wrap-dispatch cfg $ mdata)
+                #_(retry/wrap-retry cfg $ mdata)
+                (wrap-metrics cfg $ mdata)
+                (wrap-audit cfg $ mdata))
 
         spec  (or (::sv/spec mdata) (s/spec any?))
         auth? (:auth mdata true)]
 
     (l/trace :action "register" :name (::sv/name mdata))
     (with-meta
-      (fn [params]
+      (fn [{:keys [::request profile-id] :as params}]
         ;; Raise authentication error when rpc method requires auth but
         ;; no profile-id is found in the request.
         (when (and auth? (not (uuid? (:profile-id params))))
@@ -93,35 +171,15 @@
                     :code :authentication-required
                     :hint "authentication required for this endpoint"))
 
-        (let [params' (dissoc params ::request)
-              params' (us/conform spec params')
-              result  (f cfg params')]
-
-          ;; When audit log is enabled (default false).
-          (when (fn? audit)
-            (let [resultm    (meta result)
-                  request    (::request params)
-                  profile-id (or (:profile-id params')
-                                 (:profile-id result)
-                                 (::audit/profile-id resultm))
-                  props      (d/merge params' (::audit/props resultm))]
-              (audit :cmd :submit
-                     :type (or (::audit/type resultm)
-                               (::type cfg))
-                     :name (or (::audit/name resultm)
-                               (::sv/name mdata))
-                     :profile-id profile-id
-                     :ip-addr (audit/parse-client-ip request)
-                     :props props)))
-
-          result))
+        (let [params (us/conform spec (dissoc params ::request))]
+          (f cfg (assoc params ::request request))))
       mdata)))
 
 (defn- process-method
   [cfg vfn]
   (let [mdata (meta vfn)]
     [(keyword (::sv/name mdata))
-     (wrap-impl cfg (deref vfn) mdata)]))
+     (wrap cfg (deref vfn) mdata)]))
 
 (defn- resolve-query-methods
   [cfg]
@@ -170,15 +228,16 @@
 (s/def ::session map?)
 (s/def ::tokens fn?)
 (s/def ::audit (s/nilable fn?))
+(s/def ::executors (s/map-of keyword? ::wrk/executor))
 
 (defmethod ig/pre-init-spec ::rpc [_]
   (s/keys :req-un [::storage ::session ::tokens ::audit
-                   ::mtx/metrics ::db/pool]))
+                   ::executors ::mtx/metrics ::db/pool]))
 
 (defmethod ig/init-key ::rpc
   [_ cfg]
   (let [mq (resolve-query-methods cfg)
         mm (resolve-mutation-methods cfg)]
     {:methods {:query mq :mutation mm}
-     :query-handler #(rpc-query-handler mq %)
-     :mutation-handler #(rpc-mutation-handler mm %)}))
+     :query-handler (partial rpc-query-handler mq)
+     :mutation-handler (partial rpc-mutation-handler mm)}))

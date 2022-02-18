@@ -134,13 +134,21 @@
 
 (defn- middleware
   [events-ch store handler]
-  (fn [request]
-    (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
-      (do
-        (a/>!! events-ch id)
-        (l/set-context! {:profile-id profile-id})
-        (handler (assoc request :profile-id profile-id :session-id id)))
-      (handler request))))
+  (fn
+    ;; ([request]
+    ;;  (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
+    ;;    (do
+    ;;      (a/>!! events-ch id)
+    ;;      (l/set-context! {:profile-id profile-id})
+    ;;      (handler (assoc request :profile-id profile-id :session-id id)))
+    ;;    (handler request)))
+    ([request respond raise]
+     (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
+       (do
+         (a/>!! events-ch id)
+         (l/set-context! {:profile-id profile-id})
+         (handler (assoc request :profile-id profile-id :session-id id) respond raise))
+       (handler request respond raise)))))
 
 ;; --- STATE INIT: SESSION
 
@@ -164,7 +172,7 @@
 
     (-> cfg
         (assoc ::events-ch events-ch)
-        (assoc :middleware #(middleware events-ch store %))
+        (assoc :middleware (partial middleware events-ch store))
         (assoc :create (fn [profile-id]
                          (fn [request response]
                            (let [token (create-session store request profile-id)]

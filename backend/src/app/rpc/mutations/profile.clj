@@ -22,7 +22,9 @@
    [app.util.rlimit :as rlimit]
    [app.util.services :as sv]
    [app.util.time :as dt]
+   [app.util.async :as async]
    [buddy.hashers :as hashers]
+
    [clojure.spec.alpha :as s]
    [cuerdas.core :as str]))
 
@@ -366,7 +368,8 @@
           :opt-un [::lang ::theme]))
 
 (sv/defmethod ::update-profile
-  [{:keys [pool] :as cfg} params]
+  {::async/dispatch :default}
+  [{:keys [pool executor] :as cfg} params]
   (db/with-atomic [conn pool]
     (let [profile (update-profile conn params)]
       (with-meta profile
