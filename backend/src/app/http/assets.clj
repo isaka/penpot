@@ -14,6 +14,8 @@
    [app.metrics :as mtx]
    [app.storage :as sto]
    [app.util.time :as dt]
+   [app.util.async :as async]
+   [promesa.core :as p]
    [clojure.spec.alpha :as s]
    [integrant.core :as ig]))
 
@@ -69,29 +71,38 @@
          :body ""}))))
 
 (defn- generic-handler
-  [{:keys [storage] :as cfg} _request id]
-  (let [obj (sto/get-object storage id)]
-    (if obj
-      (serve-object cfg obj)
-      {:status 404 :body ""})))
+  [{:keys [storage executor] :as cfg} request kf]
+  (async/with-dispatch executor
+    (let [id   (get-in request [:path-params :id])
+          mobj (get-file-media-object storage id)
+          obj  (sto/get-object storage (kf mobj))]
+      (if obj
+        (serve-object cfg obj)
+        {:status 404 :body ""}))))
 
 (defn objects-handler
-  [cfg request]
-  (let [id (get-in request [:path-params :id])]
-    (generic-handler cfg request (coerce-id id))))
+  [{:keys [storage executor] :as cfg} request respond raise]
+    (-> (async/with-dispatch executor
+          (let [id (get-in request [:path-params :id])
+                id (coerce-id id)
+                obj  (sto/get-object storage id)]
+            (if obj
+              (serve-object cfg obj)
+              {:status 404 :body ""})))
+        (p/then respond)
+        (p/catch raise)))
 
 (defn file-objects-handler
-  [{:keys [storage] :as cfg} request]
-  (let [id   (get-in request [:path-params :id])
-        mobj (get-file-media-object storage id)]
-    (generic-handler cfg request (:media-id mobj))))
+  [cfg request respond raise]
+  (-> (generic-handler cfg request :media-id)
+      (p/then respond)
+      (p/catch raise)))
 
 (defn file-thumbnails-handler
-  [{:keys [storage] :as cfg} request]
-  (let [id   (get-in request [:path-params :id])
-        mobj (get-file-media-object storage id)]
-    (generic-handler cfg request (or (:thumbnail-id mobj) (:media-id mobj)))))
-
+  [{:keys [storage] :as cfg} request respond raise]
+  (-> (generic-handler cfg request #(or (:thumbnail-id %) (:media-id %)))
+      (p/then respond)
+      (p/catch raise)))
 
 ;; --- Initialization
 
@@ -105,6 +116,9 @@
 
 (defmethod ig/init-key ::handlers
   [_ cfg]
-  {:objects-handler #(objects-handler cfg %)
-   :file-objects-handler #(file-objects-handler cfg %)
-   :file-thumbnails-handler #(file-thumbnails-handler cfg %)})
+  (let [executor (get-in cfg [:executors :default])
+        cfg      (assoc cfg :executor executor)]
+    {:objects-handler (partial objects-handler cfg)
+     :file-objects-handler (partial file-objects-handler cfg)
+     :file-thumbnails-handler (partial file-thumbnails-handler cfg)}))
+

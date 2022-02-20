@@ -72,7 +72,9 @@
   (let [default (rr/routes
                  (rr/create-resource-handler {:path "/"})
                  (rr/create-default-handler))
-        options {:middleware [middleware/wrap-server-timing]}
+        options {:middleware [middleware/wrap-server-timing]
+                 :inject-match? false
+                 :inject-router? false}
         handler (rr/ring-handler router default options)]
     (fn
       ;; ([request]

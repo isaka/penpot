@@ -22,16 +22,15 @@
 
 (defn wrap-server-timing
   [handler]
-  (let [seconds-from #(float (/ (- (System/nanoTime) %) 1000000000))]
+  (letfn [(get-age [start]
+            (float (/ (- (System/nanoTime) start) 1000000000)))
+
+          (update-headers [headers start]
+            (assoc headers "Server-Timing" (str "total;dur=" (get-age start))))]
+
     (fn [request respond raise]
       (let [start (System/nanoTime)]
-        (handler request
-                 (fn [response]
-                   (-> response
-                       (update :headers (fn [headers]
-                                          (assoc headers "Server-Timing" (str "total;dur=" (seconds-from start)))))
-                       (respond)))
-                 raise)))))
+        (handler request #(respond (update % :headers update-headers start)) raise)))))
 
 (defn wrap-parse-request-body
   [handler]
@@ -73,7 +72,7 @@
         (let [request (handle-request request)]
           (handler request respond raise))
         (catch Exception cause
-          (ex/try* #(respond (handle-exception cause)) raise))))))
+          (respond (handle-exception cause)))))))
 
 (def parse-request-body
   {:name ::parse-request-body

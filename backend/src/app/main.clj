@@ -24,16 +24,20 @@
     :min-pool-size 0
     :max-pool-size 60}
 
+   ;; Default thread pool for IO operations
    [::default :app.worker/executor]
-   {:parallelism 200
+   {:parallelism 130
     :name :default}
 
+   ;; Constrained thread pool. Should only be used from high demand
+   ;; RPC methods.
    [::blocking :app.worker/executor]
-   {:parallelism 20
+   {:parallelism 30
     :name :blocking}
 
+   ;; Dedicated thread pool for backround tasks execution.
    [::worker :app.worker/executor]
-   {:parallelism 10
+   {:parallelism 30
     :name :worker}
 
    :app.migrations/migrations
