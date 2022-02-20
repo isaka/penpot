@@ -15,7 +15,6 @@
    [app.http.oauth :refer [extract-utm-props]]
    [app.loggers.audit :as audit]
    [app.media :as media]
-   [app.metrics :as mtx]
    [app.rpc.mutations.teams :as teams]
    [app.rpc.queries.profile :as profile]
    [app.storage :as sto]
@@ -40,7 +39,6 @@
 (s/def ::theme ::us/string)
 (s/def ::invitation-token ::us/not-empty-string)
 
-(declare annotate-profile-register)
 (declare check-profile-existence!)
 (declare create-profile)
 (declare create-profile-relations)
@@ -144,14 +142,6 @@
     (-> (assoc cfg :conn conn)
         (register-profile params))))
 
-(defn- annotate-profile-register
-  "A helper for properly increase the profile-register metric once the
-  transaction is completed."
-  [metrics]
-  (fn []
-    (let [mobj (get-in metrics [:definitions :profile-register])]
-      ((::mtx/fn mobj) {:by 1}))))
-
 (defn register-profile
   [{:keys [conn tokens session metrics] :as cfg} {:keys [token] :as params}]
   (let [claims    (tokens :verify {:token token :iss :prepared-register})
@@ -180,7 +170,6 @@
               resp   {:invitation-token token}]
           (with-meta resp
             {:transform-response ((:create session) (:id profile))
-             :before-complete (annotate-profile-register metrics)
              ::audit/props (audit/profile->props profile)
              ::audit/profile-id (:id profile)}))
 
@@ -190,7 +179,6 @@
         (not= "penpot" (:auth-backend profile))
         (with-meta (profile/strip-private-attrs profile)
           {:transform-response ((:create session) (:id profile))
-           :before-complete (annotate-profile-register metrics)
            ::audit/props (audit/profile->props profile)
            ::audit/profile-id (:id profile)})
 
@@ -199,7 +187,6 @@
         (true? is-active)
         (with-meta (profile/strip-private-attrs profile)
           {:transform-response ((:create session) (:id profile))
-           :before-complete (annotate-profile-register metrics)
            ::audit/props (audit/profile->props profile)
            ::audit/profile-id (:id profile)})
 
@@ -222,8 +209,7 @@
                       :extra-data ptoken})
 
           (with-meta profile
-            {:before-complete (annotate-profile-register metrics)
-             ::audit/props (audit/profile->props profile)
+            {::audit/props (audit/profile->props profile)
              ::audit/profile-id (:id profile)}))))))
 
 (defn create-profile

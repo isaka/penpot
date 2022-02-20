@@ -309,24 +309,21 @@
               :context {:incoming-revn (:revn params)
                         :stored-revn (:revn file)}))
 
-  (let [mtx1    (get-in metrics [:definitions :update-file-changes])
-        mtx2    (get-in metrics [:definitions :update-file-bytes-processed])
-
-        changes (if changes-with-metadata
+  (let [changes (if changes-with-metadata
                   (mapcat :changes changes-with-metadata)
                   changes)
 
         changes (vec changes)
 
         ;; Trace the number of changes processed
-        _       ((::mtx/fn mtx1) {:by (count changes)})
+        _       (mtx/run! metrics {:id :update-file-changes :inc (count changes)})
 
         ts      (dt/now)
         file    (-> (files/retrieve-data cfg file)
                     (update :revn inc)
                     (update :data (fn [data]
                                     ;; Trace the length of bytes of processed data
-                                    ((::mtx/fn mtx2) {:by (alength data)})
+                                    (mtx/run! metrics {:id :update-file-bytes-processed :inc (alength data)})
                                     (-> data
                                         (blob/decode)
                                         (assoc :id (:id file))

@@ -10,6 +10,7 @@
    [app.common.exceptions :as ex]
    [app.common.logging :as l]
    [app.common.spec :as us]
+   [app.config :as cf]
    [app.http.doc :as doc]
    [app.http.errors :as errors]
    [app.http.middleware :as middleware]
@@ -24,19 +25,30 @@
 
 (declare wrap-router)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; HTTP SERVER
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (s/def ::handler fn?)
 (s/def ::router some?)
 (s/def ::port ::us/integer)
 (s/def ::host ::us/string)
 (s/def ::name ::us/string)
-
-(defmethod ig/pre-init-spec ::server [_]
-  (s/keys :req-un [::port]
-          :opt-un [::name ::mtx/metrics ::router ::handler ::host]))
+(s/def ::max-threads ::cf/http-server-max-threads)
+(s/def ::min-threads ::cf/http-server-min-threads)
 
 (defmethod ig/prep-key ::server
   [_ cfg]
-  (merge {:name "http"} (d/without-nils cfg)))
+  (merge {:name "http"
+          :min-threads 4
+          :max-threads 60
+          :port 6060
+          :host "0.0.0.0"}
+         (d/without-nils cfg)))
+
+(defmethod ig/pre-init-spec ::server [_]
+  (s/keys :req-un [::port ::host ::name ::min-threads ::max-threads]
+          :opt-un [::mtx/metrics ::router ::handler]))
 
 (defn- instrument-metrics
   [^Server server metrics]
@@ -48,9 +60,14 @@
 
 (defmethod ig/init-key ::server
   [_ {:keys [handler router port name metrics host] :as opts}]
-  (l/info :msg "starting http server" :port port :host host :name name)
+  (l/info :hint "starting http server"
+          :port port :host host :name name
+          :min-threads (:min-threads opts)
+          :max-threads (:max-threads opts))
   (let [options {:http/port port
                  :http/host host
+                 :thread-pool/max-threads (:max-threads opts)
+                 :thread-pool/min-threads (:min-threads opts)
                  :ring/async true}
         handler (cond
                   (fn? handler)  handler
@@ -58,7 +75,7 @@
                   :else (ex/raise :type :internal
                                   :code :invalid-argument
                                   :hint "Missing `handler` or `router` option."))
-        server  (-> (yt/server handler options)
+        server  (-> (yt/server handler (d/without-nils options))
                     (cond-> metrics (instrument-metrics metrics)))]
     (assoc opts :server (yt/start! server))))
 
@@ -76,26 +93,16 @@
                  :inject-match? false
                  :inject-router? false}
         handler (rr/ring-handler router default options)]
-    (fn
-      ;; ([request]
-      ;;  (try
-      ;;    (handler request)
-      ;;    (catch Throwable cause
-      ;;      (l/error :hint "unexpected error processing request"
-      ;;               ::l/context (errors/get-error-context request cause)
-      ;;               :query-string (:query-string request)
-      ;;               :cause cause)
-      ;;      {:status 500 :body "internal server error"})))
-      ([request respond raise]
-       (handler request respond (fn [cause]
-                                  (l/error :hint "unexpected error processing request"
-                                           ::l/context (errors/get-error-context request cause)
-                                           :query-string (:query-string request)
-                                           :cause cause)
-                                  (respond {:status 500 :body "internal server error"})))))))
+    (fn [request respond raise]
+      (handler request respond (fn [cause]
+                                 (l/error :hint "unexpected error processing request"
+                                          ::l/context (errors/get-error-context request cause)
+                                          :query-string (:query-string request)
+                                          :cause cause)
+                                 (respond {:status 500 :body "internal server error"}))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Http Router
+;; HTTP ROUTER
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (s/def ::rpc map?)

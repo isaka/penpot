@@ -132,31 +132,30 @@
                                                          :value ""
                                                          :max-age -1}})))
 
-
-;; TODO: make it fully async?
-
 (defn- middleware
-  [events-ch store handler]
+  [events-ch store executor handler]
   (fn [request respond raise]
-    (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
-      (do
-        (a/>!! events-ch id)
-        (l/set-context! {:profile-id profile-id})
-        (handler (assoc request :profile-id profile-id :session-id id) respond raise))
-      (handler request respond raise))))
+    (aa/with-dispatch executor
+      (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
+        (do
+          (a/>!! events-ch id)
+          (l/set-context! {:profile-id profile-id})
+          (handler (assoc request :profile-id profile-id :session-id id) respond raise))
+        (handler request respond raise)))))
 
 ;; --- STATE INIT: SESSION
 
 (s/def ::tokens fn?)
 (defmethod ig/pre-init-spec ::session [_]
-  (s/keys :req-un [::db/pool ::tokens]))
+  (s/keys :req-un [::db/pool ::tokens ::wrk/executor]))
 
 (defmethod ig/prep-key ::session
   [_ cfg]
-  (d/merge {:buffer-size 128} (d/without-nils cfg)))
+  (d/merge {:buffer-size 128}
+           (d/without-nils cfg)))
 
 (defmethod ig/init-key ::session
-  [_ {:keys [pool tokens] :as cfg}]
+  [_ {:keys [pool tokens executor] :as cfg}]
   (let [events-ch (a/chan (a/dropping-buffer (:buffer-size cfg)))
         store     (if (db/read-only? pool)
                     (->MemoryStore (atom {}) tokens)
@@ -167,7 +166,7 @@
 
     (-> cfg
         (assoc ::events-ch events-ch)
-        (assoc :middleware (partial middleware events-ch store))
+        (assoc :middleware (partial middleware events-ch store executor))
         (assoc :create (fn [profile-id]
                          (fn [request response]
                            (let [token (create-session store request profile-id)]
@@ -210,16 +209,11 @@
           :max-batch-size (str (:max-batch-size cfg)))
   (let [input (aa/batch (::events-ch session)
                         {:max-batch-size (:max-batch-size cfg)
-                         :max-batch-age (inst-ms (:max-batch-age cfg))})
-        mcnt  (mtx/create
-               {:name "http_session_update_total"
-                :help "A counter of session update batch events."
-                :registry (:registry metrics)
-                :type :counter})]
+                         :max-batch-age (inst-ms (:max-batch-age cfg))})]
     (a/go-loop []
       (when-let [[reason batch] (a/<! input)]
         (let [result (a/<! (update-sessions cfg batch))]
-          (mcnt :inc)
+          (mtx/run! metrics {:id :session-update-total :inc 1})
           (cond
             (ex/exception? result)
             (l/error :task "updater"
@@ -231,6 +225,7 @@
                      :hint "update sessions"
                      :reason (name reason)
                      :count result))
+
           (recur))))))
 
 (defn- update-sessions

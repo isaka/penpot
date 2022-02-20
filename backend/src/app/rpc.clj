@@ -90,15 +90,17 @@
 
 (defn- wrap-metrics
   "Wrap service method with metrics measurement."
-  [{:keys [::mobj]} f mdata]
-  (let [labels [(::sv/name mdata)]]
+  [{:keys [metrics ::metrics-id]} f mdata]
+  (let [labels (into-array String [(::sv/name mdata)])]
     (fn [cfg params]
       (let [start (System/nanoTime)]
         (p/finally
           (f cfg params)
           (fn [_ _]
-            (let [val (/ (- (System/nanoTime) start) 1000000)]
-              ((::mtx/fn mobj) {:val val :labels labels}))))))))
+            (mtx/run! metrics
+                      {:id metrics-id
+                       :val (/ (- (System/nanoTime) start) 1000000)
+                       :labels labels})))))))
 
 (defn- wrap-dispatch
   "Wraps service method into async flow, with the ability to dispatching
@@ -180,13 +182,7 @@
 
 (defn- resolve-query-methods
   [cfg]
-  (let [mobj (mtx/create
-              {:name "rpc_query_timing"
-               :labels ["name"]
-               :registry (get-in cfg [:metrics :registry])
-               :type :histogram
-               :help "Timing of query services."})
-        cfg  (assoc cfg ::mobj mobj ::type "query")]
+  (let [cfg (assoc cfg ::type "query" ::metrics-id :rpc-query-timing)]
     (->> (sv/scan-ns 'app.rpc.queries.projects
                      'app.rpc.queries.files
                      'app.rpc.queries.teams
@@ -199,13 +195,7 @@
 
 (defn- resolve-mutation-methods
   [cfg]
-  (let [mobj (mtx/create
-              {:name "rpc_mutation_timing"
-               :labels ["name"]
-               :registry (get-in cfg [:metrics :registry])
-               :type :histogram
-               :help "Timing of mutation services."})
-        cfg  (assoc cfg ::mobj mobj ::type "mutation")]
+  (let [cfg (assoc cfg ::type "mutation" ::metrics-id :rpc-mutation-timing)]
     (->> (sv/scan-ns 'app.rpc.mutations.demo
                      'app.rpc.mutations.media
                      'app.rpc.mutations.profile

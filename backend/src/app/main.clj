@@ -21,24 +21,32 @@
     :metrics    (ig/ref :app.metrics/metrics)
     :migrations (ig/ref :app.migrations/all)
     :name :main
-    :min-pool-size 0
-    :max-pool-size 60}
+    :min-size (cf/get :database-min-pool-size 0)
+    :max-size (cf/get :database-max-pool-size 30)}
 
    ;; Default thread pool for IO operations
    [::default :app.worker/executor]
-   {:parallelism 130
-    :name :default}
+   {:parallelism (cf/get :default-executor-parallelism 120)
+    :prefix :default}
 
    ;; Constrained thread pool. Should only be used from high demand
    ;; RPC methods.
    [::blocking :app.worker/executor]
-   {:parallelism 30
-    :name :blocking}
+   {:parallelism (cf/get :blocking-executor-parallelism 20)
+    :prefix :blocking}
 
    ;; Dedicated thread pool for backround tasks execution.
    [::worker :app.worker/executor]
-   {:parallelism 30
-    :name :worker}
+   {:parallelism (cf/get :worker-executor-parallelism 10)
+    :prefix :worker}
+
+   :app.worker/executors-monitor
+   {:executors
+    {:default  (ig/ref [::default :app.worker/executor])
+     :blocking (ig/ref [::blocking :app.worker/executor])
+     :worker   (ig/ref [::worker :app.worker/executor])}
+
+    :metrics   (ig/ref :app.metrics/metrics)}
 
    :app.migrations/migrations
    {}
@@ -66,8 +74,9 @@
    {:pool     (ig/ref :app.db/pool)}
 
    :app.http.session/session
-   {:pool   (ig/ref :app.db/pool)
-    :tokens (ig/ref :app.tokens/tokens)}
+   {:pool     (ig/ref :app.db/pool)
+    :tokens   (ig/ref :app.tokens/tokens)
+    :executor (ig/ref [::default :app.worker/executor])}
 
    :app.http.session/gc-task
    {:pool        (ig/ref :app.db/pool)
@@ -86,10 +95,13 @@
     :pool    (ig/ref :app.db/pool)}
 
    :app.http/server
-   {:port    (cf/get :http-server-port)
-    :host    (cf/get :http-server-host)
-    :router  (ig/ref :app.http/router)
-    :metrics (ig/ref :app.metrics/metrics)}
+   {:port        (cf/get :http-server-port)
+    :host        (cf/get :http-server-host)
+    :router      (ig/ref :app.http/router)
+    :metrics     (ig/ref :app.metrics/metrics)
+
+    :max-threads (cf/get :http-server-max-threads)
+    :min-threads (cf/get :http-server-min-threads)}
 
    :app.http/router
    {:assets               (ig/ref :app.http.assets/handlers)

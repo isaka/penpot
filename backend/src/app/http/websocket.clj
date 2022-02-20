@@ -104,32 +104,28 @@
 
 (defmethod ig/init-key ::handler
   [_ {:keys [metrics pool] :as cfg}]
-  (let [metrics {:connections (get-in metrics [:definitions :websocket-active-connections])
-                 :messages    (get-in metrics [:definitions :websocket-messages-total])
-                 :sessions    (get-in metrics [:definitions :websocket-session-timing])}]
-    (fn [{:keys [profile-id params] :as req}]
-      (let [params (us/conform ::handler-params params)
-            file   (retrieve-file pool (:file-id params))
-            cfg    (-> (merge cfg params)
-                       (assoc :profile-id profile-id)
-                       (assoc :team-id (:team-id file))
-                       (assoc ::ws/metrics metrics))]
+  (fn [{:keys [profile-id params] :as req}]
+    (let [params (us/conform ::handler-params params)
+          file   (retrieve-file pool (:file-id params))
+          cfg    (-> (merge cfg params)
+                     (assoc :profile-id profile-id)
+                     (assoc :team-id (:team-id file)))]
 
-        (when-not profile-id
-          (ex/raise :type :authentication
-                    :hint "Authentication required."))
+      (when-not profile-id
+        (ex/raise :type :authentication
+                  :hint "Authentication required."))
 
-        (when-not file
-          (ex/raise :type :not-found
-                    :code :object-not-found))
+      (when-not file
+        (ex/raise :type :not-found
+                  :code :object-not-found))
 
-        (when-not (yws/upgrade-request? req)
-          (ex/raise :type :validation
-                    :code :websocket-request-expected
-                    :hint "this endpoint only accepts websocket connections"))
+      (when-not (yws/upgrade-request? req)
+        (ex/raise :type :validation
+                  :code :websocket-request-expected
+                  :hint "this endpoint only accepts websocket connections"))
 
-        (->> (ws/handler handle-message cfg)
-             (yws/upgrade req))))))
+      (->> (ws/handler handle-message cfg)
+           (yws/upgrade req)))))
 
 (def ^:private
   sql:retrieve-file

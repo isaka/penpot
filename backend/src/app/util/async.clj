@@ -63,7 +63,7 @@
 
 (defmacro with-dispatch
   [executor & body]
-  `(px/submit! (^:once fn* [] ~@body)))
+  `(px/submit! ~executor (^:once fn* [] ~@body)))
 
 (defn batch
   [in {:keys [max-batch-size
