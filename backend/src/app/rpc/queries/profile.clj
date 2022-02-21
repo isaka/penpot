@@ -12,6 +12,7 @@
    [app.db :as db]
    [app.util.services :as sv]
    [clojure.spec.alpha :as s]
+   [app.util.rlimit :as rlimit]
    [app.util.async :as async]
    [cuerdas.core :as str]))
 
@@ -37,7 +38,10 @@
   (s/keys :opt-un [::profile-id]))
 
 (sv/defmethod ::profile
-  {:auth false}
+  {:auth false
+   ::async/dispatch :default
+   ::rlimit/permits 4
+   }
   [{:keys [pool] :as cfg} {:keys [profile-id] :as params}]
   ;; We need to return the anonymous profile object in two cases, when
   ;; no profile-id is in session, and when db call raises not found. In all other

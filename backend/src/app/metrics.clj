@@ -14,10 +14,14 @@
   (:import
    io.prometheus.client.CollectorRegistry
    io.prometheus.client.Counter
+   io.prometheus.client.Counter$Child
    io.prometheus.client.Gauge
+   io.prometheus.client.Gauge$Child
    io.prometheus.client.Summary
+   io.prometheus.client.Summary$Child
    io.prometheus.client.Summary$Builder
    io.prometheus.client.Histogram
+   io.prometheus.client.Histogram$Child
    io.prometheus.client.exporter.common.TextFormat
    io.prometheus.client.hotspot.DefaultExports
    io.prometheus.client.jetty.JettyStatisticsCollector
@@ -84,6 +88,24 @@
     :labels ["name"]
     :type :summary}
 
+   :rlimit-queued-submissions
+   {:name "penpot_rlimit_queued_submissions"
+    :help "Current number of queued submissions on RLIMIT."
+    :labels ["name"]
+    :type :gauge}
+
+   :rlimit-used-permits
+   {:name "penpot_rlimit_used_permits"
+    :help "Current number of used permits on RLIMIT."
+    :labels ["name"]
+    :type :gauge}
+
+   :rlimit-acquires-total
+   {:name "penpot_rlimit_acquires_total"
+    :help "Total number of acquire operations on RLIMIT."
+    :labels ["name"]
+    :type :counter}
+
    :executors-active-threads
    {:name "penpot_executors_active_threads"
     :help "Current number of threads available in the executor service."
@@ -133,6 +155,16 @@
 ;; Implementation
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def default-empty-labels (into-array String []))
+
+(def default-quantiles
+  [[0.5  0.01]
+   [0.90 0.01]
+   [0.99 0.001]])
+
+(def default-histogram-buckets
+  [1 5 10 25 50 75 100 250 500 750 1000 2500 5000 7500])
+
 (defn run!
   [{:keys [definitions]} {:keys [id] :as params}]
   (when-let [mobj (get definitions id)]
@@ -162,11 +194,9 @@
         instance (.register instance registry)]
 
     {::instance instance
-     ::fn (fn [{:keys [inc labels] :or {inc 1}}]
-            (let [instance (if (some? labels)
-                             (.labels instance (if (is-array? labels) labels (into-array String labels)))
-                             instance)]
-              (.inc ^Counter instance (double inc))))}))
+     ::fn (fn [{:keys [inc labels] :or {inc 1 labels default-empty-labels}}]
+            (let [instance (.labels instance (if (is-array? labels) labels (into-array String labels)))]
+              (.inc ^Counter$Child instance (double inc))))}))
 
 (defn make-gauge
   [{:keys [name help registry reg labels] :as props}]
@@ -177,20 +207,12 @@
         _        (when (seq labels)
                    (.labelNames instance (into-array String labels)))
         instance (.register instance registry)]
-
     {::instance instance
-     ::fn (fn [{:keys [inc dec labels val]}]
-            (let [instance (if (some? labels)
-                             (.labels ^Gauge instance (if (is-array? labels) labels (into-array String labels)))
-                             instance)]
-              (cond (number? inc) (.inc ^Gauge instance (double inc))
-                    (number? dec) (.dec ^Gauge instance (double dec))
-                    (number? val) (.set ^Gauge instance (double val)))))}))
-
-(def default-quantiles
-  [[0.5  0.01]
-   [0.90 0.01]
-   [0.99 0.001]])
+     ::fn (fn [{:keys [inc dec labels val] :or {labels default-empty-labels}}]
+            (let [instance (.labels ^Gauge instance (if (is-array? labels) labels (into-array String labels)))]
+              (cond (number? inc) (.inc ^Gauge$Child instance (double inc))
+                    (number? dec) (.dec ^Gauge$Child instance (double dec))
+                    (number? val) (.set ^Gauge$Child instance (double val)))))}))
 
 (defn make-summary
   [{:keys [name help registry reg labels max-age quantiles buckets]
@@ -209,14 +231,9 @@
         instance (.register ^Summary$Builder builder registry)]
 
     {::instance instance
-     ::fn (fn [{:keys [val labels]}]
-            (let [instance (if (some? labels)
-                             (.labels ^Summary instance (if (is-array? labels) labels (into-array String labels)))
-                             instance)]
-              (.observe ^Summary instance val)))}))
-
-(def default-histogram-buckets
-  [1 5 10 25 50 75 100 250 500 750 1000 2500 5000 7500])
+     ::fn (fn [{:keys [val labels] :or {labels default-empty-labels}}]
+            (let [instance (.labels ^Summary instance (if (is-array? labels) labels (into-array String labels)))]
+              (.observe ^Summary$Child instance val)))}))
 
 (defn make-histogram
   [{:keys [name help registry reg labels buckets]
@@ -231,11 +248,9 @@
         instance (.register instance registry)]
 
     {::instance instance
-     ::fn (fn [{:keys [val labels]}]
-            (let [instance (if (some? labels)
-                             (.labels ^Histogram instance (if (is-array? labels) labels (into-array String labels)))
-                             instance)]
-              (.observe ^Histogram instance val)))}))
+     ::fn (fn [{:keys [val labels] :or {labels default-empty-labels}}]
+            (let [instance (.labels ^Histogram instance (if (is-array? labels) labels (into-array String labels)))]
+              (.observe ^Histogram$Child instance val)))}))
 
 (defn create
   [{:keys [type] :as props}]

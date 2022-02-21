@@ -135,13 +135,12 @@
 (defn- middleware
   [events-ch store executor handler]
   (fn [request respond raise]
-    (aa/with-dispatch executor
-      (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
-        (do
-          (a/>!! events-ch id)
-          (l/set-context! {:profile-id profile-id})
-          (handler (assoc request :profile-id profile-id :session-id id) respond raise))
-        (handler request respond raise)))))
+    (if-let [{:keys [id profile-id] :as session} (retrieve-from-request store request)]
+      (do
+        (a/>!! events-ch id)
+        (l/set-context! {:profile-id profile-id})
+        (handler (assoc request :profile-id profile-id :session-id id) respond raise))
+      (handler request respond raise))))
 
 ;; --- STATE INIT: SESSION
 

@@ -122,7 +122,8 @@
                     :hint (format "executor %s not configured" dname)))
         (with-meta
           (fn [cfg params]
-            (px/submit! executor #(f cfg params)))
+            (-> (px/submit! executor #(f cfg params))
+                (p/bind p/wrap)))
           mdata)))))
 
 (defn- wrap-audit
@@ -130,32 +131,33 @@
   (if audit
     (with-meta
       (fn [cfg {:keys [::request] :as params}]
-        (p/finally
-          (f cfg params)
-          (fn [result _]
-            (when result
-              (let [resultm    (meta result)
-                    profile-id (or (:profile-id params)
-                                   (:profile-id result)
-                                   (::audit/profile-id resultm))
-                    props      (d/merge params (::audit/props resultm))]
-                (audit :cmd :submit
-                       :type (or (::audit/type resultm)
-                                 (::type cfg))
-                       :name (or (::audit/name resultm)
-                                 (::sv/name mdata))
-                       :profile-id profile-id
-                       :ip-addr (audit/parse-client-ip request)
-                       :props (dissoc props ::request)))))))
+        (p/finally (f cfg params)
+                   (fn [result _]
+                     (when result
+                       (let [resultm    (meta result)
+                             profile-id (or (:profile-id params)
+                                            (:profile-id result)
+                                            (::audit/profile-id resultm))
+                             props      (d/merge params (::audit/props resultm))]
+                         (audit :cmd :submit
+                                :type (or (::audit/type resultm)
+                                          (::type cfg))
+                                :name (or (::audit/name resultm)
+                                          (::sv/name mdata))
+                                :profile-id profile-id
+                                :ip-addr (audit/parse-client-ip request)
+                                :props (dissoc props ::request)))))))
       mdata)))
 
 (defn- wrap
   [{:keys [audit] :as cfg} f mdata]
   (let [f     (as-> f $
+                (rlimit/wrap-rlimit cfg $ mdata)
                 (wrap-dispatch cfg $ mdata)
-                #_(retry/wrap-retry cfg $ mdata)
+                (wrap-audit cfg $ mdata)
                 (wrap-metrics cfg $ mdata)
-                (wrap-audit cfg $ mdata))
+                #_(retry/wrap-retry cfg $ mdata)
+                )
 
         spec  (or (::sv/spec mdata) (s/spec any?))
         auth? (:auth mdata true)]

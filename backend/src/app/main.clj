@@ -119,7 +119,8 @@
     :rpc                  (ig/ref :app.rpc/rpc)}
 
    :app.http.debug/handlers
-   {:pool (ig/ref :app.db/pool)}
+   {:pool (ig/ref :app.db/pool)
+    :executor (ig/ref [::default :app.worker/executor])}
 
    :app.http.websocket/handler
    {:pool     (ig/ref :app.db/pool)
